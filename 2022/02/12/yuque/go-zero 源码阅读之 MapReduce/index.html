@@ -1,0 +1,583 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=2">
+<meta name="theme-color" content="#222">
+<meta name="generator" content="Hexo 6.0.0">
+  <link rel="apple-touch-icon" sizes="180x180" href="/images/apple-touch-icon-next.png">
+  <link rel="icon" type="image/png" sizes="32x32" href="/images/favicon-32x32-next.png">
+  <link rel="icon" type="image/png" sizes="16x16" href="/images/favicon-16x16-next.png">
+  <link rel="mask-icon" href="/images/logo.svg" color="#222">
+
+<link rel="stylesheet" href="/css/main.css">
+
+
+<link rel="stylesheet" href="/lib/font-awesome/css/all.min.css">
+
+<script id="hexo-configurations">
+    var NexT = window.NexT || {};
+    var CONFIG = {"hostname":"betnevs.github.io","root":"/","scheme":"Gemini","version":"7.8.0","exturl":false,"sidebar":{"position":"left","display":"post","padding":18,"offset":12,"onmobile":false},"copycode":{"enable":false,"show_result":false,"style":null},"back2top":{"enable":true,"sidebar":false,"scrollpercent":false},"bookmark":{"enable":false,"color":"#222","save":"auto"},"fancybox":false,"mediumzoom":false,"lazyload":false,"pangu":false,"comments":{"style":"tabs","active":null,"storage":true,"lazyload":false,"nav":null},"algolia":{"hits":{"per_page":10},"labels":{"input_placeholder":"Search for Posts","hits_empty":"We didn't find any results for the search: ${query}","hits_stats":"${hits} results found in ${time} ms"}},"localsearch":{"enable":false,"trigger":"auto","top_n_per_article":1,"unescape":false,"preload":false},"motion":{"enable":true,"async":false,"transition":{"post_block":"fadeIn","post_header":"slideDownIn","post_body":"slideDownIn","coll_header":"slideLeftIn","sidebar":"slideUpIn"}}};
+  </script>
+
+  <meta name="description" content="前言在 web 开发中，常常会遇到一个接口内依赖多个服务的情况，那必然会存在多次的接口调用，此时有串行调用和并发调用两种处理方式，来看下这两种方式的对比：   对比看出，并发调用的耗时取决于耗时最长的那个服务，整体耗时比串行调用减少了很多。熟悉 Go 的小伙伴立马会想到使用 goroutine 和 WaitGroup 来解决。但是在实际业务场景中，多个依赖中任何一个出现错误，我们期望的是立即返回，">
+<meta property="og:type" content="article">
+<meta property="og:title" content="go-zero 源码阅读之 MapReduce">
+<meta property="og:url" content="https://betnevs.github.io/2022/02/12/yuque/go-zero%20%E6%BA%90%E7%A0%81%E9%98%85%E8%AF%BB%E4%B9%8B%20MapReduce/index.html">
+<meta property="og:site_name" content="Pure Coder">
+<meta property="og:description" content="前言在 web 开发中，常常会遇到一个接口内依赖多个服务的情况，那必然会存在多次的接口调用，此时有串行调用和并发调用两种处理方式，来看下这两种方式的对比：   对比看出，并发调用的耗时取决于耗时最长的那个服务，整体耗时比串行调用减少了很多。熟悉 Go 的小伙伴立马会想到使用 goroutine 和 WaitGroup 来解决。但是在实际业务场景中，多个依赖中任何一个出现错误，我们期望的是立即返回，">
+<meta property="og:locale" content="zh_CN">
+<meta property="og:image" content="https://betnevsblog-1308361531.cos.ap-guangzhou.myqcloud.com//FmcXPuChCq_F0wQJZQTtXEAACv4W.png">
+<meta property="og:image" content="https://betnevsblog-1308361531.cos.ap-guangzhou.myqcloud.com//FvBxRu2TFESKPXmEAM-O96gKsWi1.png">
+<meta property="og:image" content="https://betnevsblog-1308361531.cos.ap-guangzhou.myqcloud.com//FmNCj1XNFWimBNexxsNulVD8-6WF.png">
+<meta property="og:image" content="https://betnevsblog-1308361531.cos.ap-guangzhou.myqcloud.com//FvvN48BhdXqEPH4OIZIWYOfWTa6Z.png">
+<meta property="og:image" content="https://betnevsblog-1308361531.cos.ap-guangzhou.myqcloud.com//FsM9IbBpi6pSkAV8-pLUIRmP9LHF.png">
+<meta property="og:image" content="https://betnevsblog-1308361531.cos.ap-guangzhou.myqcloud.com//Fjr_y8kBF5X3865p8Kq8MeQv_qO_.png">
+<meta property="og:image" content="https://betnevsblog-1308361531.cos.ap-guangzhou.myqcloud.com//Fl8rNUW8lTeq6QPytxClzdK4ai3-.png">
+<meta property="article:published_time" content="2022-02-11T16:00:00.000Z">
+<meta property="article:modified_time" content="2022-04-17T10:05:51.866Z">
+<meta property="article:author" content="betNevS">
+<meta property="article:tag" content="Go">
+<meta property="article:tag" content="go-zero">
+<meta name="twitter:card" content="summary">
+<meta name="twitter:image" content="https://betnevsblog-1308361531.cos.ap-guangzhou.myqcloud.com//FmcXPuChCq_F0wQJZQTtXEAACv4W.png">
+
+<link rel="canonical" href="https://betnevs.github.io/2022/02/12/yuque/go-zero%20%E6%BA%90%E7%A0%81%E9%98%85%E8%AF%BB%E4%B9%8B%20MapReduce/">
+
+
+<script id="page-configurations">
+  // https://hexo.io/docs/variables.html
+  CONFIG.page = {
+    sidebar: "",
+    isHome : false,
+    isPost : true,
+    lang   : 'zh-CN'
+  };
+</script>
+
+  <title>go-zero 源码阅读之 MapReduce | Pure Coder</title>
+  
+
+
+
+
+
+
+  <noscript>
+  <style>
+  .use-motion .brand,
+  .use-motion .menu-item,
+  .sidebar-inner,
+  .use-motion .post-block,
+  .use-motion .pagination,
+  .use-motion .comments,
+  .use-motion .post-header,
+  .use-motion .post-body,
+  .use-motion .collection-header { opacity: initial; }
+
+  .use-motion .site-title,
+  .use-motion .site-subtitle {
+    opacity: initial;
+    top: initial;
+  }
+
+  .use-motion .logo-line-before i { left: initial; }
+  .use-motion .logo-line-after i { right: initial; }
+  </style>
+</noscript>
+
+</head>
+
+<body itemscope itemtype="http://schema.org/WebPage">
+  <div class="container use-motion">
+    <div class="headband"></div>
+
+    <header class="header" itemscope itemtype="http://schema.org/WPHeader">
+      <div class="header-inner"><div class="site-brand-container">
+  <div class="site-nav-toggle">
+    <div class="toggle" aria-label="切换导航栏">
+      <span class="toggle-line toggle-line-first"></span>
+      <span class="toggle-line toggle-line-middle"></span>
+      <span class="toggle-line toggle-line-last"></span>
+    </div>
+  </div>
+
+  <div class="site-meta">
+
+    <a href="/" class="brand" rel="start">
+      <span class="logo-line-before"><i></i></span>
+      <h1 class="site-title">Pure Coder</h1>
+      <span class="logo-line-after"><i></i></span>
+    </a>
+      <p class="site-subtitle" itemprop="description">Holiday</p>
+  </div>
+
+  <div class="site-nav-right">
+    <div class="toggle popup-trigger">
+    </div>
+  </div>
+</div>
+
+
+
+
+<nav class="site-nav">
+  <ul id="menu" class="main-menu menu">
+        <li class="menu-item menu-item-home">
+
+    <a href="/" rel="section"><i class="fa fa-home fa-fw"></i>首页</a>
+
+  </li>
+        <li class="menu-item menu-item-tags">
+
+    <a href="/tags/" rel="section"><i class="fa fa-tags fa-fw"></i>标签</a>
+
+  </li>
+        <li class="menu-item menu-item-archives">
+
+    <a href="/archives/" rel="section"><i class="fa fa-archive fa-fw"></i>归档</a>
+
+  </li>
+  </ul>
+</nav>
+
+
+
+
+</div>
+    </header>
+
+    
+  <div class="back-to-top">
+    <i class="fa fa-arrow-up"></i>
+    <span>0%</span>
+  </div>
+
+
+    <main class="main">
+      <div class="main-inner">
+        <div class="content-wrap">
+          
+
+          <div class="content post posts-expand">
+            
+
+    
+  
+  
+  <article itemscope itemtype="http://schema.org/Article" class="post-block" lang="zh-CN">
+    <link itemprop="mainEntityOfPage" href="https://betnevs.github.io/2022/02/12/yuque/go-zero%20%E6%BA%90%E7%A0%81%E9%98%85%E8%AF%BB%E4%B9%8B%20MapReduce/">
+
+    <span hidden itemprop="author" itemscope itemtype="http://schema.org/Person">
+      <meta itemprop="image" content="/images/avatar.gif">
+      <meta itemprop="name" content="betNevS">
+      <meta itemprop="description" content="做自己喜欢做的事情">
+    </span>
+
+    <span hidden itemprop="publisher" itemscope itemtype="http://schema.org/Organization">
+      <meta itemprop="name" content="Pure Coder">
+    </span>
+      <header class="post-header">
+        <h1 class="post-title" itemprop="name headline">
+          go-zero 源码阅读之 MapReduce
+        </h1>
+
+        <div class="post-meta">
+            <span class="post-meta-item">
+              <span class="post-meta-item-icon">
+                <i class="far fa-calendar"></i>
+              </span>
+              <span class="post-meta-item-text">发表于</span>
+
+              <time title="创建时间：2022-02-12 00:00:00" itemprop="dateCreated datePublished" datetime="2022-02-12T00:00:00+08:00">2022-02-12</time>
+            </span>
+              <span class="post-meta-item">
+                <span class="post-meta-item-icon">
+                  <i class="far fa-calendar-check"></i>
+                </span>
+                <span class="post-meta-item-text">更新于</span>
+                <time title="修改时间：2022-04-17 18:05:51" itemprop="dateModified" datetime="2022-04-17T18:05:51+08:00">2022-04-17</time>
+              </span>
+
+          
+
+        </div>
+      </header>
+
+    
+    
+    
+    <div class="post-body" itemprop="articleBody">
+
+      
+        <h2 id="前言"><a href="#前言" class="headerlink" title="前言"></a>前言</h2><p>在 web 开发中，常常会遇到一个接口内依赖多个服务的情况，那必然会存在多次的接口调用，此时有<code>串行调用和并发调用</code>两种处理方式，来看下这两种方式的对比：</p>
+<p><img src="https://betnevsblog-1308361531.cos.ap-guangzhou.myqcloud.com//FmcXPuChCq_F0wQJZQTtXEAACv4W.png"></p>
+<p><img src="https://betnevsblog-1308361531.cos.ap-guangzhou.myqcloud.com//FvBxRu2TFESKPXmEAM-O96gKsWi1.png"></p>
+<p>对比看出，并发调用的耗时取决于耗时最长的那个服务，整体耗时比串行调用减少了很多。熟悉 Go 的小伙伴立马会想到使用 <code>goroutine</code> 和 <code>WaitGroup</code> 来解决。<code>但是在实际业务场景中，多个依赖中任何一个出现错误，我们期望的是立即返回，而不是等待所有的依赖执行完在返回结果。</code>要想实现以上功能需要编排好并发任务，并且做好并发协程中的错误传递，这并不是个简单的事情，有很多细节要处理。归纳几个重点：</p>
+<ol>
+<li>控制协程数量，当任务数太多时，不能一个任务起一个协程。</li>
+<li>错误取消，在并发过程中，出现错误则取消所有任务，返回失败（使用者可选择不取消）。</li>
+<li>防止协程泄漏。</li>
+</ol>
+<p>针对以上场景，go-zero 提供了 MapReduce 并发控制工具，能够很好地进行并发任务的编排，下面先应用场景进行介绍，知道它的使用才能更好的了解它的设计思想。</p>
+<span id="more"></span>
+
+<h2 id="应用场景"><a href="#应用场景" class="headerlink" title="应用场景"></a>应用场景</h2><ol>
+<li>并发请求多个的接口，并对请求结果进行聚合</li>
+</ol>
+<figure class="highlight go"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br><span class="line">24</span><br><span class="line">25</span><br><span class="line">26</span><br><span class="line">27</span><br><span class="line">28</span><br><span class="line">29</span><br><span class="line">30</span><br><span class="line">31</span><br><span class="line">32</span><br><span class="line">33</span><br></pre></td><td class="code"><pre><span class="line"><span class="function"><span class="keyword">func</span> <span class="title">main</span><span class="params">()</span></span> &#123;</span><br><span class="line">	result := <span class="built_in">make</span>(<span class="keyword">map</span>[<span class="keyword">string</span>]<span class="keyword">string</span>)</span><br><span class="line">	err := mr.Finish(<span class="function"><span class="keyword">func</span><span class="params">()</span> <span class="title">error</span></span> &#123; <span class="comment">// 使用 mr.Finsh 进行并发任务</span></span><br><span class="line">		url := <span class="string">&quot;https://www.baidu.com&quot;</span></span><br><span class="line">		res, err := requestUrl(url)</span><br><span class="line">		<span class="keyword">if</span> err != <span class="literal">nil</span> &#123;</span><br><span class="line">			<span class="keyword">return</span> err</span><br><span class="line">		&#125;</span><br><span class="line">		result[url] = <span class="keyword">string</span>(res)</span><br><span class="line">		<span class="keyword">return</span> <span class="literal">nil</span></span><br><span class="line">	&#125;, <span class="function"><span class="keyword">func</span><span class="params">()</span> <span class="title">error</span></span> &#123;</span><br><span class="line">		url := <span class="string">&quot;https://www.google.cn/&quot;</span></span><br><span class="line">		res, err := requestUrl(url)</span><br><span class="line">		<span class="keyword">if</span> err != <span class="literal">nil</span> &#123;</span><br><span class="line">			<span class="keyword">return</span> err <span class="comment">// 返回错误，则函数内部会取消所有任务，并直接返回结果</span></span><br><span class="line">		&#125;</span><br><span class="line">		result[url] = <span class="keyword">string</span>(res)</span><br><span class="line">		<span class="keyword">return</span> <span class="literal">nil</span></span><br><span class="line">	&#125;)</span><br><span class="line">	<span class="keyword">if</span> err != <span class="literal">nil</span> &#123;</span><br><span class="line">		log.Fatal(err)</span><br><span class="line">	&#125;</span><br><span class="line">	fmt.Println(result)</span><br><span class="line">&#125;</span><br><span class="line"></span><br><span class="line"><span class="function"><span class="keyword">func</span> <span class="title">requestUrl</span><span class="params">(url <span class="keyword">string</span>)</span> <span class="params">([]<span class="keyword">byte</span>, error)</span></span> &#123;</span><br><span class="line">	resp, err := http.Get(url)</span><br><span class="line">	<span class="keyword">if</span> err != <span class="literal">nil</span> &#123;</span><br><span class="line">		<span class="keyword">return</span> <span class="literal">nil</span>, err</span><br><span class="line">	&#125;</span><br><span class="line">	<span class="keyword">defer</span> resp.Body.Close()</span><br><span class="line">	<span class="keyword">return</span> ioutil.ReadAll(resp.Body)</span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure>
+
+<p>以上代码，利用 MapReduce 中的 <code>mr.Finish()</code> 函数并发请求两个 url，并将返回值进行聚合到 result 的 map 中，如果其中一个并发请求出现错误返回，则取消所有任务，并直接返回结果，不需要等待所有任务返回，极大的提升了接口性能。</p>
+<blockquote>
+<p><code>mr.Finish()</code>   函数是基于 <code>mr.MapReduce()</code>   进行了一层封装，本质还是  <code>MapReduce</code> 。</p>
+</blockquote>
+<ol start="2">
+<li>并发处理数据，利用 <code>MapReduce</code> 的思想</li>
+</ol>
+<figure class="highlight go"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br><span class="line">24</span><br><span class="line">25</span><br><span class="line">26</span><br><span class="line">27</span><br><span class="line">28</span><br><span class="line">29</span><br><span class="line">30</span><br><span class="line">31</span><br><span class="line">32</span><br><span class="line">33</span><br><span class="line">34</span><br><span class="line">35</span><br><span class="line">36</span><br><span class="line">37</span><br><span class="line">38</span><br><span class="line">39</span><br></pre></td><td class="code"><pre><span class="line"><span class="function"><span class="keyword">func</span> <span class="title">main</span><span class="params">()</span></span> &#123;</span><br><span class="line">    output, err := mr.MapReduce(<span class="function"><span class="keyword">func</span><span class="params">(source <span class="keyword">chan</span>&lt;- <span class="keyword">interface</span>&#123;&#125;)</span></span> &#123;</span><br><span class="line">       <span class="comment">// 生产者</span></span><br><span class="line">       <span class="keyword">for</span> _, uid := <span class="keyword">range</span> getUids() &#123;</span><br><span class="line">           source &lt;- uid</span><br><span class="line">       &#125;</span><br><span class="line">    &#125;, <span class="function"><span class="keyword">func</span><span class="params">(item <span class="keyword">interface</span>&#123;&#125;, writer mr.Writer, cancel <span class="keyword">func</span>(error)</span>)</span> &#123;</span><br><span class="line">        <span class="comment">// 映射操作，过滤非法uid</span></span><br><span class="line">        uid := item.(<span class="keyword">int</span>)</span><br><span class="line">        <span class="keyword">if</span> checkUid(uid) &#123;</span><br><span class="line">            writer.Write(uid)</span><br><span class="line">        &#125; <span class="keyword">else</span> &#123;</span><br><span class="line">            <span class="comment">//cancel(errors.New(&quot;wrong uid&quot;))  // 此处可选，如果发现uid异常则取消所有并发任务</span></span><br><span class="line">        &#125;</span><br><span class="line">    &#125;, <span class="function"><span class="keyword">func</span><span class="params">(pipe &lt;-<span class="keyword">chan</span> <span class="keyword">interface</span>&#123;&#125;, writer mr.Writer, cancel <span class="keyword">func</span>(error)</span>)</span> &#123;</span><br><span class="line">        <span class="comment">// 聚合操作，将合法的uid聚合并返回</span></span><br><span class="line">        uids := <span class="built_in">make</span>([]<span class="keyword">int</span>, <span class="number">0</span>)</span><br><span class="line">        <span class="keyword">for</span> uid := <span class="keyword">range</span> pipe &#123;</span><br><span class="line">            uids = <span class="built_in">append</span>(uids, uid.(<span class="keyword">int</span>))</span><br><span class="line">        &#125;</span><br><span class="line">        writer.Write(uids)</span><br><span class="line">    &#125;)</span><br><span class="line">    <span class="keyword">if</span> err != <span class="literal">nil</span> &#123;</span><br><span class="line">        log.Fatal(err)</span><br><span class="line">    &#125;</span><br><span class="line">    fmt.Println(output)</span><br><span class="line">&#125;</span><br><span class="line"></span><br><span class="line"><span class="comment">// 此处模拟一个接口</span></span><br><span class="line"><span class="function"><span class="keyword">func</span> <span class="title">checkUid</span><span class="params">(uid <span class="keyword">int</span>)</span> <span class="title">bool</span></span>  &#123;</span><br><span class="line">    <span class="keyword">if</span> uid &gt; <span class="number">99</span> &#123;</span><br><span class="line">        <span class="keyword">return</span> <span class="literal">false</span></span><br><span class="line">    &#125;</span><br><span class="line">    <span class="keyword">return</span> <span class="literal">true</span></span><br><span class="line">&#125;</span><br><span class="line"></span><br><span class="line"><span class="function"><span class="keyword">func</span> <span class="title">getUids</span><span class="params">()</span> []<span class="title">int</span></span> &#123;</span><br><span class="line">    <span class="keyword">return</span> []<span class="keyword">int</span>&#123;<span class="number">1</span>,<span class="number">2</span>,<span class="number">3</span>,<span class="number">4</span>,<span class="number">5</span>,<span class="number">100</span>,<span class="number">9</span>&#125;</span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure>
+
+<p>以上代码，并发请求接口 <code>checkUid</code> 校验 uid 是否合法，当在 <code>map</code> 和 <code>reduce</code> 操作中出现 error 时，使用者可以选择通过调用 <code>cancel(error)</code>函数取消所有并发的请求，立即返回结果。在 <code>map</code> 和 <code>reduce</code> 操作中利用 <code>mr.Writer</code> 实现通过 Go 中的 channel 传递数据。</p>
+<h2 id="源码设计"><a href="#源码设计" class="headerlink" title="源码设计"></a>源码设计</h2><h3 id="MapReduce-代码结构"><a href="#MapReduce-代码结构" class="headerlink" title="MapReduce 代码结构"></a>MapReduce 代码结构</h3><p><img src="https://betnevsblog-1308361531.cos.ap-guangzhou.myqcloud.com//FmNCj1XNFWimBNexxsNulVD8-6WF.png"></p>
+<p>由上图可知，<code>MapReduce</code> 的代码结构主要由以下三个部分组成：</p>
+<ol>
+<li><code>Generate</code> 负责产生原数据，提供给 <code>Map</code> 进行处理</li>
+<li><code>Map</code> 负责执行具体的业务逻辑处理，一般是多协程并发执行（数量由使用者自行定义）</li>
+<li><code>Reduce</code> 负责将 <code>Map</code> 操作的结果进行聚合</li>
+</ol>
+<p>接下来，我们将以上面三部分作为我们代码设计的目标。</p>
+<h3 id="Generate-代码设计"><a href="#Generate-代码设计" class="headerlink" title="Generate 代码设计"></a>Generate 代码设计</h3><p><code>Generate</code> 是为了产生原始数据，然后将数据写入通道中，提供给 <code>Map</code> 进行处理，结构如下：</p>
+<p><img src="https://betnevsblog-1308361531.cos.ap-guangzhou.myqcloud.com//FvvN48BhdXqEPH4OIZIWYOfWTa6Z.png"></p>
+<p>根据上面的功能描述，我们的设计目标是：</p>
+<ol>
+<li>提供一个函数让使用者写原始数据产生的逻辑</li>
+<li>提供一个通道让使用者写入数据</li>
+<li>将目标 1，2 中的逻辑封装在一起，并且将目标 2 中的通道提供给 <code>Map</code> 部分的代码使用</li>
+</ol>
+<p>针对目标 1，我们可以定义一个函数变量 <code>GenerateFunc func(source chan&lt;- interface&#123;&#125;)</code> ，使用者只需在 <code>GenerateFunc</code> 中实现自己产生原始数据的逻辑，然后将数据写入通道 <code>source</code> 中，目标 1 就完成了。</p>
+<p>针对目标 2，使用者只负责写入数据，不会去维护一个通道的，因此目标 1 中的通道 <code>source</code> 需要代码设计者自己维护，为了保证通用性，因此定义通道 <code>source</code> 为 <code>source := make(chan interface&#123;&#125;)</code> 。</p>
+<p>针对目标 3，我们封装一个函数 <code>func buildSource(generate GenerateFunc) chan interface&#123;&#125;</code> ，接收使用者实现的写入原始数据的逻辑，然后将提供通道给 <code>Map</code> 部分的代码使用。</p>
+<p>我们可以得到初始代码如下：</p>
+<figure class="highlight go"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br></pre></td><td class="code"><pre><span class="line"><span class="function"><span class="keyword">func</span> <span class="title">buildSource</span><span class="params">(generate GenerateFunc)</span> <span class="title">chan</span> <span class="title">interface</span></span>&#123;&#125; &#123;</span><br><span class="line">    source := <span class="built_in">make</span>(<span class="keyword">chan</span> <span class="keyword">interface</span>&#123;&#125;)</span><br><span class="line">    <span class="keyword">go</span> <span class="function"><span class="keyword">func</span><span class="params">()</span></span> &#123;</span><br><span class="line">        generate(source)</span><br><span class="line">        <span class="built_in">close</span>(source)</span><br><span class="line">    &#125;()</span><br><span class="line">    <span class="keyword">return</span> source</span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure>
+
+<p>以上代码在功能上已经满足了我们的设计目标，但是作为代码的设计者需要为使用者思考的更多些，由于以上第 4 行的代码<code>generate()</code> 是由使用者去实现里面的具体逻辑，可能会出现 <code>panic</code> 的情况，如果没有进行 <code>recover()</code> 则会导致整个进程的退出，因此设计者需要替使用者着想，优化代码如下：</p>
+<figure class="highlight go"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br></pre></td><td class="code"><pre><span class="line"><span class="function"><span class="keyword">func</span> <span class="title">buildSource</span><span class="params">(generate GenerateFunc)</span> <span class="title">chan</span> <span class="title">interface</span></span>&#123;&#125; &#123;</span><br><span class="line">    source := <span class="built_in">make</span>(<span class="keyword">chan</span> <span class="keyword">interface</span>&#123;&#125;)</span><br><span class="line">    <span class="keyword">go</span> <span class="function"><span class="keyword">func</span><span class="params">()</span></span> &#123;</span><br><span class="line">      <span class="comment">// 增加对 panic 的 recover</span></span><br><span class="line">        <span class="keyword">defer</span> <span class="function"><span class="keyword">func</span><span class="params">()</span></span> &#123;</span><br><span class="line">            <span class="keyword">if</span> err := <span class="built_in">recover</span>(); err != <span class="literal">nil</span> &#123;</span><br><span class="line">                log.Println(err)</span><br><span class="line">            &#125;</span><br><span class="line">        &#125;()</span><br><span class="line">        generate(source)</span><br><span class="line">        <span class="built_in">close</span>(source)</span><br><span class="line">    &#125;()</span><br><span class="line">    <span class="keyword">return</span> source</span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure>
+
+<p>但还有一个不完美的地方，就是以上代码的第 11 行，如果第 10 行代码 <code>generate()</code> 出现 <code>panic</code> ，是不会执行到第 11 行的 <code>close(source)</code> ，导致通道 <code>source</code> 的使用者感知不到通道已经关闭了，容易导致阻塞和协程泄漏的问题。因此可以通过 <code>defer</code> 优化下：</p>
+<figure class="highlight go"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br></pre></td><td class="code"><pre><span class="line"><span class="function"><span class="keyword">func</span> <span class="title">buildSource</span><span class="params">(generate GenerateFunc)</span> <span class="title">chan</span> <span class="title">interface</span></span>&#123;&#125; &#123;</span><br><span class="line">    source := <span class="built_in">make</span>(<span class="keyword">chan</span> <span class="keyword">interface</span>&#123;&#125;)</span><br><span class="line">    <span class="keyword">go</span> <span class="function"><span class="keyword">func</span><span class="params">()</span></span> &#123;</span><br><span class="line">      <span class="comment">// 增加对 panic 的 recover</span></span><br><span class="line">        <span class="keyword">defer</span> <span class="function"><span class="keyword">func</span><span class="params">()</span></span> &#123;</span><br><span class="line">            <span class="keyword">if</span> err := <span class="built_in">recover</span>(); err != <span class="literal">nil</span> &#123;</span><br><span class="line">                log.Println(err)</span><br><span class="line">            &#125;</span><br><span class="line">        &#125;()</span><br><span class="line">      <span class="comment">// 增加 defer 优化</span></span><br><span class="line">        <span class="keyword">defer</span> <span class="built_in">close</span>(source)</span><br><span class="line">        generate(source)</span><br><span class="line">    &#125;()</span><br><span class="line">    <span class="keyword">return</span> source</span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure>
+
+<blockquote>
+<p>在使用通道的时候一定要遵守，谁写入谁关闭，谁接收谁消费殆尽，否则很容易出现协程泄漏的问题。殆尽，这个词很重要，后面会讲为什么。</p>
+</blockquote>
+<blockquote>
+<p><code>recover()</code>   只能捕获同一个协程中的中 <code>panic</code> ，并不能捕获子协程中的 <code>panic</code> 。由于函数 generate() 是由使用者实现的，为了防止其中出现 <code>panic</code> 导致整个程序的退出，代码的设计者在这里进行了兜底，但如果在函数 generate()   中 又用 <code>go func()&#123;&#125;()</code> 另起一个协程，并且其中出现了 <code>panic</code> ，那就兜底不了，整个程序会退出，这对于 web 这种常驻服务来说是不能接受的，所以要小心再小心。</p>
+</blockquote>
+<p>为了避免协程 <code>panic</code> ，<code>go-zero</code> 专门封装了一个安全启动协程的代码，具体实现如下：</p>
+<figure class="highlight go"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br></pre></td><td class="code"><pre><span class="line"><span class="function"><span class="keyword">func</span> <span class="title">GoSafe</span><span class="params">(fn <span class="keyword">func</span>()</span>)</span> &#123;</span><br><span class="line">	<span class="keyword">go</span> RunSafe(fn)</span><br><span class="line">&#125;</span><br><span class="line"></span><br><span class="line"><span class="function"><span class="keyword">func</span> <span class="title">RunSafe</span><span class="params">(fn <span class="keyword">func</span>()</span>)</span> &#123;</span><br><span class="line">	<span class="keyword">defer</span> rescue.Recover()</span><br><span class="line"></span><br><span class="line">	fn()</span><br><span class="line">&#125;</span><br><span class="line"></span><br><span class="line"><span class="function"><span class="keyword">func</span> <span class="title">Recover</span><span class="params">(cleanups ...<span class="keyword">func</span>()</span>)</span> &#123;</span><br><span class="line">	<span class="keyword">for</span> _, cleanup := <span class="keyword">range</span> cleanups &#123;</span><br><span class="line">		cleanup()</span><br><span class="line">	&#125;</span><br><span class="line"></span><br><span class="line">	<span class="keyword">if</span> p := <span class="built_in">recover</span>(); p != <span class="literal">nil</span> &#123;</span><br><span class="line">		logx.ErrorStack(p)</span><br><span class="line">	&#125;</span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure>
+
+<p>至此，<code>Generate</code> 部分就设计完毕了，接下来我们进入 <code>Map</code> 部分的设计。</p>
+<h3 id="Map-代码设计"><a href="#Map-代码设计" class="headerlink" title="Map 代码设计"></a>Map 代码设计</h3><p><code>Map</code> 部分是从通道中读取数据，然后执行 <code>Map</code> 操作的具体逻辑，最后写入另一个通道，提供给 <code>Reduce</code> 使用。</p>
+<p><img src="https://betnevsblog-1308361531.cos.ap-guangzhou.myqcloud.com//FsM9IbBpi6pSkAV8-pLUIRmP9LHF.png"></p>
+<p>根据上面的功能描述，我们的设计目标是：</p>
+<ol>
+<li>提供一个函数让使用者写具体执行的 <code>map</code> 逻辑</li>
+<li>提供一个通道让使用者写入执行完 <code>map</code> 逻辑之后的数据，提供给 <code>Reduce</code> 使用</li>
+<li>并发执行 <code>map</code> 逻辑，并发协程数量可控</li>
+</ol>
+<p>针对目标 1、2，我们定义一个函数变量 <code>MapFunc func(item interface&#123;&#125;, collector chan&lt;- interface&#123;&#125;)</code> ，使用者只需在 <code>MapFunc</code> 中实现自己的 <code>map</code> 逻辑，然后将数据写入通道 <code>collector</code> 中就完成任务。</p>
+<p>针对目标 3，我们利用 <code>go func()&#123;&#125;()</code> 就能轻易执行并发逻辑，那么如何控制并发数量呢？此处我们先定义一个变量 <code>works int</code> 表示需要控制的协程数量，然后<strong>控制并发协程数量可以理解成超过使用者设定数量的协程就阻塞，等前面的协程运行完再轮到后面阻塞的协程</strong>。基于以上理解，我们可以利用 Go 的带缓存通道，定义一个变量<code>pool := make(chan struct&#123;&#125;, workers)</code>，此处使用空结构体 <code>struct&#123;&#125;</code> 代表只是为了占位，并不是为了传输数据，能够向通道 <code>pool</code> 写入数据，则表示允许启动一个协程运行任务，当通道中的缓存满了，则向通道写入数据会阻塞，表示目前已经达到可运行协程数量上限，需等待前面的协程运行结束。</p>
+<p>基于以上目标，我们可以定义一个控制执行所有 <code>map</code> 逻辑的函数 <code>func executeMappers(mapper MapFunc, input &lt;-chan interface&#123;&#125;, collecter chan&lt;- interface&#123;&#125;, workers int)</code> ，初始代码如下：</p>
+<figure class="highlight go"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br><span class="line">24</span><br><span class="line">25</span><br><span class="line">26</span><br><span class="line">27</span><br></pre></td><td class="code"><pre><span class="line"><span class="function"><span class="keyword">func</span> <span class="title">executeMappers</span><span class="params">(mapper MapFunc, input &lt;-<span class="keyword">chan</span> <span class="keyword">interface</span>&#123;&#125;, collector <span class="keyword">chan</span>&lt;- <span class="keyword">interface</span>&#123;&#125;, workers <span class="keyword">int</span>)</span></span>  &#123;</span><br><span class="line">    pool := <span class="built_in">make</span>(<span class="keyword">chan</span> <span class="keyword">struct</span>&#123;&#125;, workers)</span><br><span class="line">    <span class="keyword">var</span> wg sync.WaitGroup</span><br><span class="line">    <span class="keyword">defer</span> <span class="function"><span class="keyword">func</span><span class="params">()</span></span> &#123;</span><br><span class="line">        wg.Wait()</span><br><span class="line">        <span class="built_in">close</span>(collector)</span><br><span class="line">    &#125;()</span><br><span class="line">    <span class="keyword">for</span> &#123;</span><br><span class="line">        <span class="keyword">select</span> &#123;</span><br><span class="line">        <span class="keyword">case</span> pool&lt;- <span class="keyword">struct</span>&#123;&#125;&#123;&#125;:  <span class="comment">// 空结构体放入 pool 占1个位</span></span><br><span class="line">            item, ok := &lt;-input</span><br><span class="line">            <span class="keyword">if</span> !ok &#123;</span><br><span class="line">                &lt;-pool <span class="comment">// 取出 pool</span></span><br><span class="line">                <span class="keyword">return</span></span><br><span class="line">            &#125;</span><br><span class="line"></span><br><span class="line">            wg.Add(<span class="number">1</span>)</span><br><span class="line">            <span class="keyword">go</span> <span class="function"><span class="keyword">func</span><span class="params">()</span></span> &#123;</span><br><span class="line">                <span class="keyword">defer</span> <span class="function"><span class="keyword">func</span><span class="params">()</span></span> &#123;</span><br><span class="line">                   wg.Done()</span><br><span class="line">                   &lt;-pool <span class="comment">// 从 pool 读出一个空结构体，释放1个位</span></span><br><span class="line">                &#125;()</span><br><span class="line">                mapper(item, collector)</span><br><span class="line">            &#125;()</span><br><span class="line">        &#125;</span><br><span class="line">    &#125;</span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure>
+
+<p><code>executeMappers</code> 函数相当于整个 <code>map</code> 操作部分的管理者，从以上代码第 8 行到第 26 行，就是一个 for 循环不断从通道 <code>input</code> 中读取数据（第 11 行），然后启动协程去执行使用者定义的<code>map</code> 操作（第 23 行），当 <code>input</code> 被关闭之后就退出 for 循环（第 11-15 行），等待所有并发的协程执行完毕则关闭通道 <code>collector</code>（第 4-7 行）。</p>
+<p>以上代码实现了基本功能，但是有两个地方不够完美：</p>
+<ol>
+<li>和之前一样 <code>mapper</code> 函数是由使用者实现逻辑，可能出现 <code>panic</code> ，代码设计者要帮忙 <code>recover</code></li>
+<li>如果 <code>map</code> 操作中出现错误，使用者可以通过取消操作停止所有的 <code>map</code> 操作</li>
+</ol>
+<p>针对 1，我们使用上面封装好的 <code>GoSafe</code> 函数即可解决。针对 2，需要先明白停止所有的 <code>map</code> 操作需要做什么事情，一个是退出 <code>executeMappers</code> 函数中的 for 循环，一个是 <code>mapper</code> 函数中停止向通道 <code>collector</code> 写入数据。在 Go 语言中，我们通常会采用 <code>close</code> 一个通道来达到<strong>广播通知</strong>的效果，因此我们需要再定义一个通道 <code>done &lt;-chan struct&#123;&#125;</code> ，因此优化后的代码为：</p>
+<figure class="highlight go"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br><span class="line">24</span><br><span class="line">25</span><br><span class="line">26</span><br><span class="line">27</span><br><span class="line">28</span><br><span class="line">29</span><br><span class="line">30</span><br><span class="line">31</span><br><span class="line">32</span><br></pre></td><td class="code"><pre><span class="line"><span class="function"><span class="keyword">func</span> <span class="title">executeMappers</span><span class="params">(mapper MapFunc, input &lt;-<span class="keyword">chan</span> <span class="keyword">interface</span>&#123;&#125;, collector <span class="keyword">chan</span>&lt;- <span class="keyword">interface</span>&#123;&#125;, workers <span class="keyword">int</span>, done &lt;-<span class="keyword">chan</span> <span class="keyword">struct</span>&#123;&#125;)</span></span>  &#123;</span><br><span class="line">    pool := <span class="built_in">make</span>(<span class="keyword">chan</span> <span class="keyword">struct</span>&#123;&#125;, workers)</span><br><span class="line">    <span class="keyword">var</span> wg sync.WaitGroup</span><br><span class="line">    <span class="keyword">defer</span> <span class="function"><span class="keyword">func</span><span class="params">()</span></span> &#123;</span><br><span class="line">        wg.Wait()</span><br><span class="line">        <span class="built_in">close</span>(collector)</span><br><span class="line">    &#125;()</span><br><span class="line">    <span class="keyword">for</span> &#123;</span><br><span class="line">        <span class="keyword">select</span> &#123;</span><br><span class="line">          <span class="comment">// 通道关闭，则退出循环</span></span><br><span class="line">        <span class="keyword">case</span> &lt;-done:</span><br><span class="line">            <span class="keyword">return</span></span><br><span class="line">        <span class="keyword">case</span> pool&lt;- <span class="keyword">struct</span>&#123;&#125;&#123;&#125;:</span><br><span class="line">            item, ok := &lt;-input</span><br><span class="line">            <span class="keyword">if</span> !ok &#123;</span><br><span class="line">                &lt;-pool</span><br><span class="line">                <span class="keyword">return</span></span><br><span class="line">            &#125;</span><br><span class="line"></span><br><span class="line">            wg.Add(<span class="number">1</span>)</span><br><span class="line">           <span class="comment">// 更安全的方式启动协程</span></span><br><span class="line">            threading.GoSafe(<span class="function"><span class="keyword">func</span><span class="params">()</span></span> &#123;</span><br><span class="line">                <span class="keyword">defer</span> <span class="function"><span class="keyword">func</span><span class="params">()</span></span> &#123;</span><br><span class="line">                    wg.Done()</span><br><span class="line">                    &lt;-pool</span><br><span class="line">                &#125;()</span><br><span class="line">                <span class="comment">// 增加 done 传入</span></span><br><span class="line">                mapper(item, collector, done)</span><br><span class="line">            &#125;)</span><br><span class="line">        &#125;</span><br><span class="line">    &#125;</span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure>
+
+<p>以上代码对于使用者来说增加了编码的工作，因为之前只需要在代码中将执行 <code>map</code> 逻辑的数据写入通道 <code>collector</code> ，现在还需要增加一个判断逻辑，伪代码如下：</p>
+<figure class="highlight go"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment">// 旧</span></span><br><span class="line"><span class="function"><span class="keyword">func</span> <span class="title">mapper</span><span class="params">(item <span class="keyword">interface</span>&#123;&#125;, collector <span class="keyword">chan</span>&lt;- <span class="keyword">interface</span>&#123;&#125;)</span></span> &#123;</span><br><span class="line">  newdata := dofunc(item)</span><br><span class="line">  collector &lt;- newdata</span><br><span class="line">&#125;</span><br><span class="line"></span><br><span class="line"><span class="comment">// 新</span></span><br><span class="line"><span class="function"><span class="keyword">func</span> <span class="title">mapper</span><span class="params">(item <span class="keyword">interface</span>&#123;&#125;, collector <span class="keyword">chan</span>&lt;- <span class="keyword">interface</span>&#123;&#125;, done &lt;-<span class="keyword">chan</span> <span class="keyword">struct</span>&#123;&#125;)</span></span> &#123;</span><br><span class="line">  newdata := dofunc(item)</span><br><span class="line">  <span class="keyword">select</span> &#123;</span><br><span class="line">    <span class="keyword">case</span> &lt;-done:</span><br><span class="line">    	<span class="keyword">return</span></span><br><span class="line">    <span class="keyword">default</span>:</span><br><span class="line">  		collector &lt;- newdata</span><br><span class="line">  &#125;</span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure>
+
+<p>对比两者，对于使用者来说还是增加了一定的负担，而且代码也不够好看，有没有办法代码的设计者帮使用者解决这个问题呢？</p>
+<p>我们可以将 <code>collector chan&lt;- interface&#123;&#125; 和 done &lt;-chan struct&#123;&#125;</code> 进行组合，替使用者做完退出时候要做的判断。通过定义一个接口类型并实现一个 <code>Write</code> 方法，具体实现如下：</p>
+<figure class="highlight go"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br><span class="line">24</span><br><span class="line">25</span><br><span class="line">26</span><br></pre></td><td class="code"><pre><span class="line"><span class="keyword">type</span> (</span><br><span class="line">    Writer <span class="keyword">interface</span> &#123;</span><br><span class="line">        Write(v <span class="keyword">interface</span>&#123;&#125;)</span><br><span class="line">    &#125;</span><br><span class="line">)</span><br><span class="line"></span><br><span class="line"><span class="keyword">type</span> guardedWriter <span class="keyword">struct</span> &#123;</span><br><span class="line">	channel <span class="keyword">chan</span>&lt;- <span class="keyword">interface</span>&#123;&#125;</span><br><span class="line">    done    &lt;-<span class="keyword">chan</span> <span class="keyword">struct</span>&#123;&#125;</span><br><span class="line">&#125;</span><br><span class="line"></span><br><span class="line"><span class="function"><span class="keyword">func</span> <span class="title">newGuardedWriter</span><span class="params">(channel <span class="keyword">chan</span>&lt;- <span class="keyword">interface</span>&#123;&#125;, done &lt;-<span class="keyword">chan</span> <span class="keyword">struct</span>&#123;&#125;)</span> <span class="title">guardedWriter</span></span> &#123;</span><br><span class="line">	<span class="keyword">return</span> guardedWriter&#123;</span><br><span class="line">		channel: channel,</span><br><span class="line">		done:    done,</span><br><span class="line">	&#125;</span><br><span class="line">&#125;</span><br><span class="line"></span><br><span class="line"><span class="function"><span class="keyword">func</span> <span class="params">(gw guardedWriter)</span> <span class="title">Write</span><span class="params">(v <span class="keyword">interface</span>&#123;&#125;)</span></span> &#123;</span><br><span class="line">	<span class="keyword">select</span> &#123;</span><br><span class="line">	<span class="keyword">case</span> &lt;-gw.done:</span><br><span class="line">		<span class="keyword">return</span></span><br><span class="line">	<span class="keyword">default</span>:</span><br><span class="line">		gw.channel &lt;- v</span><br><span class="line">	&#125;</span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure>
+
+<p>通过 <code>guardedWriter</code> 我们的代码得到进一步优化，完整版如下：</p>
+<figure class="highlight go"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br><span class="line">24</span><br><span class="line">25</span><br><span class="line">26</span><br><span class="line">27</span><br><span class="line">28</span><br><span class="line">29</span><br><span class="line">30</span><br><span class="line">31</span><br><span class="line">32</span><br><span class="line">33</span><br></pre></td><td class="code"><pre><span class="line"><span class="function"><span class="keyword">func</span> <span class="title">executeMappers</span><span class="params">(mapper MapFunc, input &lt;-<span class="keyword">chan</span> <span class="keyword">interface</span>&#123;&#125;, collector <span class="keyword">chan</span>&lt;- <span class="keyword">interface</span>&#123;&#125;, done &lt;-<span class="keyword">chan</span> <span class="keyword">struct</span>&#123;&#125;, workers <span class="keyword">int</span>)</span></span> &#123;</span><br><span class="line">	<span class="keyword">var</span> wg sync.WaitGroup</span><br><span class="line">	<span class="keyword">defer</span> <span class="function"><span class="keyword">func</span><span class="params">()</span></span> &#123;</span><br><span class="line">		wg.Wait()</span><br><span class="line">		<span class="built_in">close</span>(collector)</span><br><span class="line">	&#125;()</span><br><span class="line"></span><br><span class="line">	pool := <span class="built_in">make</span>(<span class="keyword">chan</span> lang.PlaceholderType, workers)</span><br><span class="line">  <span class="comment">// 组合 writer</span></span><br><span class="line">	writer := newGuardedWriter(collector, done)</span><br><span class="line">	<span class="keyword">for</span> &#123;</span><br><span class="line">		<span class="keyword">select</span> &#123;</span><br><span class="line">		<span class="keyword">case</span> &lt;-done:</span><br><span class="line">			<span class="keyword">return</span></span><br><span class="line">		<span class="keyword">case</span> pool &lt;- lang.Placeholder:</span><br><span class="line">			item, ok := &lt;-input</span><br><span class="line">			<span class="keyword">if</span> !ok &#123;</span><br><span class="line">				&lt;-pool</span><br><span class="line">				<span class="keyword">return</span></span><br><span class="line">			&#125;</span><br><span class="line"></span><br><span class="line">			wg.Add(<span class="number">1</span>)</span><br><span class="line">			<span class="comment">// 更安全的方式启动协程</span></span><br><span class="line">			threading.GoSafe(<span class="function"><span class="keyword">func</span><span class="params">()</span></span> &#123;</span><br><span class="line">				<span class="keyword">defer</span> <span class="function"><span class="keyword">func</span><span class="params">()</span></span> &#123;</span><br><span class="line">					wg.Done()</span><br><span class="line">					&lt;-pool</span><br><span class="line">				&#125;()</span><br><span class="line">				<span class="comment">// 将 writer 代替之前的 collector 和 done</span></span><br><span class="line">				mapper(item, writer)</span><br><span class="line">			&#125;)</span><br><span class="line">		&#125;</span><br><span class="line">	&#125;</span><br></pre></td></tr></table></figure>
+
+<p>而对于使用者来说，代码得到了精简：</p>
+<figure class="highlight go"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment">// 旧</span></span><br><span class="line"><span class="function"><span class="keyword">func</span> <span class="title">mapper</span><span class="params">(item <span class="keyword">interface</span>&#123;&#125;, collector <span class="keyword">chan</span>&lt;- <span class="keyword">interface</span>&#123;&#125;, done &lt;-<span class="keyword">chan</span> <span class="keyword">struct</span>&#123;&#125;)</span></span> &#123;</span><br><span class="line">  newdata := dofunc(item)</span><br><span class="line">  <span class="keyword">select</span> &#123;</span><br><span class="line">    <span class="keyword">case</span> &lt;-done:</span><br><span class="line">    	<span class="keyword">return</span></span><br><span class="line">    <span class="keyword">default</span>:</span><br><span class="line">  		collector &lt;- newdata</span><br><span class="line">  &#125;</span><br><span class="line">&#125;</span><br><span class="line"></span><br><span class="line"><span class="comment">// 新</span></span><br><span class="line"><span class="function"><span class="keyword">func</span> <span class="title">mapper</span><span class="params">(item <span class="keyword">interface</span>&#123;&#125;, writer Writer)</span></span> &#123;</span><br><span class="line">  newdata := dofunc(item)</span><br><span class="line">  writer.Write(newdata)</span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure>
+
+<p>至此，<code>Map</code> 部分的代码也分析完了，满满的细节，接下来进行 <code>Reduce</code> 部分的代码设计。</p>
+<h3 id="Reduce-代码设计"><a href="#Reduce-代码设计" class="headerlink" title="Reduce 代码设计"></a>Reduce 代码设计</h3><p><code>Reduce</code> 部分是从通道 <code>collector</code> 中读取数据，然后进行聚合，最终返回输出给使用者。</p>
+<p><img src="https://betnevsblog-1308361531.cos.ap-guangzhou.myqcloud.com//Fjr_y8kBF5X3865p8Kq8MeQv_qO_.png"></p>
+<p>根据上面的功能描述，我们的设计目标是：</p>
+<ol>
+<li>提供一个函数让使用者写具体执行的 <code>reduce</code> 逻辑</li>
+<li>提供一个通道让使用者将执行完 <code>reduce</code> 逻辑之后的聚合数据输出</li>
+</ol>
+<p>根据之前的经验，我们可以定义一个函数变量 <code>ReducerFunc func(collector &lt;-chan interface&#123;&#125;, writer Writer)</code>，提供给使用者写 <code>reduce</code> 的逻辑代码，因此得到初始代码:</p>
+<figure class="highlight go"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br></pre></td><td class="code"><pre><span class="line"><span class="keyword">go</span> <span class="function"><span class="keyword">func</span><span class="params">()</span></span> &#123;</span><br><span class="line">		reducer(collector, writer)</span><br><span class="line">	&#125;()</span><br></pre></td></tr></table></figure>
+
+<p>而对于使用者来说，代码可以这样写：</p>
+<figure class="highlight go"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br></pre></td><td class="code"><pre><span class="line"><span class="function"><span class="keyword">func</span> <span class="title">reducer</span><span class="params">(collector &lt;-<span class="keyword">chan</span> <span class="keyword">interface</span>&#123;&#125;, writer Writer)</span></span> &#123;</span><br><span class="line">  <span class="keyword">var</span> res []<span class="keyword">interface</span>&#123;&#125;</span><br><span class="line">  <span class="keyword">for</span> t := <span class="keyword">range</span> collector &#123;</span><br><span class="line">    res = <span class="built_in">append</span>(res, t)</span><br><span class="line">  &#125;</span><br><span class="line">  writer.Write(res)</span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure>
+
+<p>与之前 <code>map</code> 部分类似，<code>reduce</code> 也是提供给使用者实现的，那么也可能出现 <code>panic</code> ，但是与 <code>map</code> 部分在 <code>recover</code> 之后的处理方式是不同的，之前 <code>map</code> 部分在 <code>recover</code> 是直接打印一个日志，因为是多任务并发执行，其中一个出错不会对我们总体的聚合结果造成太大影响，只需要记录日志。但是，最后一步 <code>reduce</code> 出错，是需要终止整个 <code>mapreducer</code> 操作，并将错误返回给使用者的。此处先记住我们需要一个 <code>cancel</code> 函数去应对异常情况。</p>
+<h3 id="cancel-函数设计"><a href="#cancel-函数设计" class="headerlink" title="cancel 函数设计"></a>cancel 函数设计</h3><p><code>MapReduce</code> 是一系列流式的操作，肯定会涉及到出错时要怎么取消的问题？其实，<code>取消（cancel）</code>和 <code>结束（finish）</code>是一个包含和被包含的关系，因为<code>结束</code>的操作一般是回收资源，<code>取消</code>是处理异常并且回收资源，它们的关系如下：</p>
+<p><img src="https://betnevsblog-1308361531.cos.ap-guangzhou.myqcloud.com//Fl8rNUW8lTeq6QPytxClzdK4ai3-.png"></p>
+<p>由上文可知，<code>MapReduce</code> 使用了很多 <code>Go</code> 的<code>通道</code>，因此处理 <code>取消（cancel）</code> 就不得不先讨论下 <code>通道</code> 的处理。由于通道阻塞的特性在使用过程中，很容易出现协程泄漏的问题，那什么是协程泄漏呢？</p>
+<blockquote>
+<p>启动的协程没有按照预期退出，直到程序结束，协程才退出，这就是协程泄漏。当出现协程泄漏，该协程的栈一直被占用不能释放，协程在堆上申请的空间也不能被垃圾回收器回收，因此在程序运行期间，内存占用持续升高，可用内存越来越少，最终导致程序崩溃。</p>
+</blockquote>
+<p>一个简化版的 <code>mapreduce</code> 代码，处理并发处理一批数据，将每个数+100，然后打印结果数组，代码如下：</p>
+<figure class="highlight go"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br><span class="line">24</span><br><span class="line">25</span><br><span class="line">26</span><br><span class="line">27</span><br><span class="line">28</span><br><span class="line">29</span><br><span class="line">30</span><br><span class="line">31</span><br><span class="line">32</span><br><span class="line">33</span><br><span class="line">34</span><br></pre></td><td class="code"><pre><span class="line"><span class="function"><span class="keyword">func</span> <span class="title">main</span><span class="params">()</span></span> &#123;</span><br><span class="line">	source := <span class="built_in">make</span>(<span class="keyword">chan</span> <span class="keyword">int</span>)</span><br><span class="line">	collector := <span class="built_in">make</span>(<span class="keyword">chan</span> <span class="keyword">int</span>)</span><br><span class="line">	<span class="keyword">var</span> res []<span class="keyword">int</span></span><br><span class="line">	<span class="comment">// generate</span></span><br><span class="line">	<span class="keyword">go</span> <span class="function"><span class="keyword">func</span><span class="params">()</span></span> &#123;</span><br><span class="line">		<span class="keyword">defer</span> fmt.Println(<span class="string">&quot;generate end&quot;</span>)</span><br><span class="line">		arr := []<span class="keyword">int</span>&#123;<span class="number">1</span>, <span class="number">2</span>, <span class="number">3</span>, <span class="number">4</span>, <span class="number">5</span>&#125;</span><br><span class="line">		<span class="keyword">for</span> _, v := <span class="keyword">range</span> arr &#123;</span><br><span class="line">			source &lt;- v</span><br><span class="line">		&#125;</span><br><span class="line">	&#125;()</span><br><span class="line">	<span class="comment">// map</span></span><br><span class="line">	<span class="keyword">go</span> <span class="function"><span class="keyword">func</span><span class="params">()</span></span> &#123;</span><br><span class="line">		<span class="keyword">defer</span> fmt.Println(<span class="string">&quot;map end&quot;</span>)</span><br><span class="line">		<span class="keyword">for</span> v := <span class="keyword">range</span> source &#123;</span><br><span class="line">			<span class="keyword">go</span> <span class="function"><span class="keyword">func</span><span class="params">(item <span class="keyword">int</span>)</span></span> &#123;</span><br><span class="line">				collector &lt;- item + <span class="number">100</span></span><br><span class="line">			&#125;(v)</span><br><span class="line">		&#125;</span><br><span class="line">	&#125;()</span><br><span class="line">	<span class="comment">// reduce</span></span><br><span class="line">	<span class="keyword">go</span> <span class="function"><span class="keyword">func</span><span class="params">()</span></span> &#123;</span><br><span class="line">		<span class="keyword">defer</span> fmt.Println(<span class="string">&quot;reduce end&quot;</span>)</span><br><span class="line">		<span class="keyword">for</span> v := <span class="keyword">range</span> collector &#123;</span><br><span class="line">			res = <span class="built_in">append</span>(res, v)</span><br><span class="line">		&#125;</span><br><span class="line">	&#125;()</span><br><span class="line">	<span class="comment">// 统计</span></span><br><span class="line">	<span class="keyword">for</span> &#123;</span><br><span class="line">		fmt.Println(<span class="string">&quot;result:&quot;</span>, res, <span class="string">&quot;, goroutine num:&quot;</span>, runtime.NumGoroutine())</span><br><span class="line">		time.Sleep(time.Second)</span><br><span class="line">	&#125;</span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure>
+
+<p>运行结果：</p>
+<figure class="highlight shell"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br></pre></td><td class="code"><pre><span class="line">result: [] , goroutine num: 4</span><br><span class="line">generate end</span><br><span class="line">result: [101 103 102 105 104] , goroutine num: 3</span><br><span class="line">result: [101 103 102 105 104] , goroutine num: 3</span><br><span class="line">result: [101 103 102 105 104] , goroutine num: 3</span><br><span class="line">result: [101 103 102 105 104] , goroutine num: 3</span><br><span class="line">.........</span><br><span class="line">.........</span><br><span class="line">.........</span><br></pre></td></tr></table></figure>
+
+<p>从上可知，一开始有 4 个协程：<code>generate</code> 协程，<code>map</code> 协程，<code>reduce</code> 协程，<code>main</code> 主协程，然后 <code>generate</code> 协程将数据写入完毕结束了，但是 <code>map</code> 协程和 <code>reduce</code> 协程却一直阻塞，没办法结束，这样就造成了这两个协程的泄漏。</p>
+<blockquote>
+<p><code>map</code> 协程阻塞在了代码 16 行，<code>reduce</code> 协程阻塞在代码 25 行。</p>
+</blockquote>
+<p>那如何解决这个问题呢？其实很简单就是一句话：<code>谁写入谁关闭</code>，关闭之后 <code>for range</code> 就会结束，不会阻塞着。修改代码如下：</p>
+<figure class="highlight go"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br><span class="line">24</span><br><span class="line">25</span><br><span class="line">26</span><br><span class="line">27</span><br><span class="line">28</span><br><span class="line">29</span><br><span class="line">30</span><br><span class="line">31</span><br><span class="line">32</span><br><span class="line">33</span><br><span class="line">34</span><br><span class="line">35</span><br><span class="line">36</span><br><span class="line">37</span><br><span class="line">38</span><br><span class="line">39</span><br><span class="line">40</span><br><span class="line">41</span><br><span class="line">42</span><br></pre></td><td class="code"><pre><span class="line"><span class="function"><span class="keyword">func</span> <span class="title">main</span><span class="params">()</span></span> &#123;</span><br><span class="line">	source := <span class="built_in">make</span>(<span class="keyword">chan</span> <span class="keyword">int</span>)</span><br><span class="line">	collector := <span class="built_in">make</span>(<span class="keyword">chan</span> <span class="keyword">int</span>)</span><br><span class="line">	<span class="keyword">var</span> res []<span class="keyword">int</span></span><br><span class="line">	<span class="comment">// generate</span></span><br><span class="line">	<span class="keyword">go</span> <span class="function"><span class="keyword">func</span><span class="params">()</span></span> &#123;</span><br><span class="line">		<span class="keyword">defer</span> fmt.Println(<span class="string">&quot;generate end&quot;</span>)</span><br><span class="line">    <span class="comment">// 新增通道关闭</span></span><br><span class="line">		<span class="keyword">defer</span> <span class="built_in">close</span>(source)</span><br><span class="line">		arr := []<span class="keyword">int</span>&#123;<span class="number">1</span>, <span class="number">2</span>, <span class="number">3</span>, <span class="number">4</span>, <span class="number">5</span>&#125;</span><br><span class="line">		<span class="keyword">for</span> _, v := <span class="keyword">range</span> arr &#123;</span><br><span class="line">			source &lt;- v</span><br><span class="line">		&#125;</span><br><span class="line">	&#125;()</span><br><span class="line">	<span class="comment">// map</span></span><br><span class="line">	<span class="keyword">go</span> <span class="function"><span class="keyword">func</span><span class="params">()</span></span> &#123;</span><br><span class="line">		<span class="keyword">defer</span> fmt.Println(<span class="string">&quot;map end&quot;</span>)</span><br><span class="line">		<span class="keyword">var</span> wg sync.WaitGroup</span><br><span class="line">		<span class="keyword">for</span> v := <span class="keyword">range</span> source &#123;</span><br><span class="line">			wg.Add(<span class="number">1</span>)</span><br><span class="line">			<span class="keyword">go</span> <span class="function"><span class="keyword">func</span><span class="params">(item <span class="keyword">int</span>)</span></span> &#123;</span><br><span class="line">				<span class="keyword">defer</span> wg.Done()</span><br><span class="line">				collector &lt;- item + <span class="number">100</span></span><br><span class="line">			&#125;(v)</span><br><span class="line">		&#125;</span><br><span class="line">		wg.Wait()</span><br><span class="line">     <span class="comment">// 新增通道关闭</span></span><br><span class="line">		<span class="built_in">close</span>(collector)</span><br><span class="line">	&#125;()</span><br><span class="line">	<span class="comment">// reduce</span></span><br><span class="line">	<span class="keyword">go</span> <span class="function"><span class="keyword">func</span><span class="params">()</span></span> &#123;</span><br><span class="line">		<span class="keyword">defer</span> fmt.Println(<span class="string">&quot;reduce end&quot;</span>)</span><br><span class="line">		<span class="keyword">for</span> v := <span class="keyword">range</span> collector &#123;</span><br><span class="line">			res = <span class="built_in">append</span>(res, v)</span><br><span class="line">		&#125;</span><br><span class="line">	&#125;()</span><br><span class="line">	<span class="comment">// 统计</span></span><br><span class="line">	<span class="keyword">for</span> &#123;</span><br><span class="line">		fmt.Println(<span class="string">&quot;result:&quot;</span>, res, <span class="string">&quot;, goroutine num:&quot;</span>, runtime.NumGoroutine())</span><br><span class="line">		time.Sleep(time.Second)</span><br><span class="line">	&#125;</span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure>
+
+<p>运行结果：</p>
+<figure class="highlight shell"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br></pre></td><td class="code"><pre><span class="line">result: [] , goroutine num: 4</span><br><span class="line">map end</span><br><span class="line">generate end</span><br><span class="line">reduce end</span><br><span class="line">result: [101 102 103 105 104] , goroutine num: 1</span><br><span class="line">result: [101 102 103 105 104] , goroutine num: 1</span><br><span class="line">result: [101 102 103 105 104] , goroutine num: 1</span><br><span class="line">.........</span><br><span class="line">.........</span><br><span class="line">.........</span><br></pre></td></tr></table></figure>
+
+<p>由上可知，<code>generate</code> 协程、<code>map</code> 协程、<code>reduce</code> 协程都正常结束了，<code>main</code> 主协程保持运行，功能正常。但假设 <code>map</code> 操作中途报错了，需要终止整个 <code>mapreduce</code> 操作，应该怎么做呢？初代码如下：</p>
+<figure class="highlight go"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br><span class="line">24</span><br><span class="line">25</span><br><span class="line">26</span><br><span class="line">27</span><br><span class="line">28</span><br><span class="line">29</span><br><span class="line">30</span><br><span class="line">31</span><br><span class="line">32</span><br><span class="line">33</span><br><span class="line">34</span><br><span class="line">35</span><br><span class="line">36</span><br><span class="line">37</span><br><span class="line">38</span><br><span class="line">39</span><br><span class="line">40</span><br><span class="line">41</span><br><span class="line">42</span><br><span class="line">43</span><br><span class="line">44</span><br><span class="line">45</span><br><span class="line">46</span><br><span class="line">47</span><br><span class="line">48</span><br></pre></td><td class="code"><pre><span class="line"><span class="function"><span class="keyword">func</span> <span class="title">main</span><span class="params">()</span></span> &#123;</span><br><span class="line">	source := <span class="built_in">make</span>(<span class="keyword">chan</span> <span class="keyword">int</span>)</span><br><span class="line">	collector := <span class="built_in">make</span>(<span class="keyword">chan</span> <span class="keyword">int</span>)</span><br><span class="line">	<span class="keyword">var</span> res []<span class="keyword">int</span></span><br><span class="line">	<span class="comment">// generate</span></span><br><span class="line">	<span class="keyword">go</span> <span class="function"><span class="keyword">func</span><span class="params">()</span></span> &#123;</span><br><span class="line">		<span class="keyword">defer</span> fmt.Println(<span class="string">&quot;generate end&quot;</span>)</span><br><span class="line">		<span class="keyword">defer</span> <span class="built_in">close</span>(source)</span><br><span class="line">		arr := []<span class="keyword">int</span>&#123;<span class="number">1</span>, <span class="number">2</span>, <span class="number">3</span>, <span class="number">4</span>, <span class="number">5</span>&#125;</span><br><span class="line">		<span class="keyword">for</span> _, v := <span class="keyword">range</span> arr &#123;</span><br><span class="line">			source &lt;- v</span><br><span class="line">		&#125;</span><br><span class="line">	&#125;()</span><br><span class="line">	<span class="comment">// map</span></span><br><span class="line">	<span class="keyword">go</span> <span class="function"><span class="keyword">func</span><span class="params">()</span></span> &#123;</span><br><span class="line">		<span class="keyword">defer</span> fmt.Println(<span class="string">&quot;map end&quot;</span>)</span><br><span class="line">		<span class="keyword">var</span> wg sync.WaitGroup</span><br><span class="line">		<span class="keyword">defer</span> <span class="function"><span class="keyword">func</span><span class="params">()</span></span> &#123;</span><br><span class="line">			wg.Wait()</span><br><span class="line">			<span class="built_in">close</span>(collector)</span><br><span class="line">		&#125;()</span><br><span class="line">		count := <span class="number">0</span></span><br><span class="line">		<span class="keyword">for</span> v := <span class="keyword">range</span> source &#123;</span><br><span class="line">			count++</span><br><span class="line">			<span class="comment">// 模拟出错</span></span><br><span class="line">			<span class="keyword">if</span> count == <span class="number">4</span> &#123;</span><br><span class="line">				<span class="keyword">return</span></span><br><span class="line">			&#125;</span><br><span class="line">			wg.Add(<span class="number">1</span>)</span><br><span class="line">			<span class="keyword">go</span> <span class="function"><span class="keyword">func</span><span class="params">(item <span class="keyword">int</span>)</span></span> &#123;</span><br><span class="line">				<span class="keyword">defer</span> wg.Done()</span><br><span class="line">				collector &lt;- item + <span class="number">100</span></span><br><span class="line">			&#125;(v)</span><br><span class="line">		&#125;</span><br><span class="line">	&#125;()</span><br><span class="line">	<span class="comment">// reduce</span></span><br><span class="line">	<span class="keyword">go</span> <span class="function"><span class="keyword">func</span><span class="params">()</span></span> &#123;</span><br><span class="line">		<span class="keyword">defer</span> fmt.Println(<span class="string">&quot;reduce end&quot;</span>)</span><br><span class="line">		<span class="keyword">for</span> v := <span class="keyword">range</span> collector &#123;</span><br><span class="line">			res = <span class="built_in">append</span>(res, v)</span><br><span class="line">		&#125;</span><br><span class="line">	&#125;()</span><br><span class="line">	<span class="comment">// 统计</span></span><br><span class="line">	<span class="keyword">for</span> &#123;</span><br><span class="line">		fmt.Println(<span class="string">&quot;result:&quot;</span>, res, <span class="string">&quot;, goroutine num:&quot;</span>, runtime.NumGoroutine())</span><br><span class="line">		time.Sleep(time.Second)</span><br><span class="line">	&#125;</span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure>
+
+<p>运行结果：</p>
+<figure class="highlight shell"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br></pre></td><td class="code"><pre><span class="line">result: [] , goroutine num: 4</span><br><span class="line">reduce end</span><br><span class="line">map end</span><br><span class="line">result: [101 103 102] , goroutine num: 2</span><br><span class="line">result: [101 103 102] , goroutine num: 2</span><br><span class="line">result: [101 103 102] , goroutine num: 2</span><br><span class="line">result: [101 103 102] , goroutine num: 2</span><br><span class="line">.........</span><br><span class="line">.........</span><br><span class="line">.........</span><br></pre></td></tr></table></figure>
+
+<p>从结果可知，还是出现了协程泄漏的问题，这是因为 <code>generate</code> 协程不知道 <code>map</code> 协程因为出错结束了，所以要解决这个问题就是另外一句话：<code>谁接收谁消费殆尽</code> 。只需要将  <code>generate</code> 协程消耗殆尽就行了，优化代码如下：</p>
+<figure class="highlight go"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br><span class="line">24</span><br><span class="line">25</span><br><span class="line">26</span><br><span class="line">27</span><br><span class="line">28</span><br><span class="line">29</span><br><span class="line">30</span><br><span class="line">31</span><br><span class="line">32</span><br><span class="line">33</span><br><span class="line">34</span><br><span class="line">35</span><br><span class="line">36</span><br><span class="line">37</span><br><span class="line">38</span><br><span class="line">39</span><br><span class="line">40</span><br><span class="line">41</span><br><span class="line">42</span><br><span class="line">43</span><br><span class="line">44</span><br><span class="line">45</span><br><span class="line">46</span><br><span class="line">47</span><br><span class="line">48</span><br><span class="line">49</span><br><span class="line">50</span><br><span class="line">51</span><br></pre></td><td class="code"><pre><span class="line"><span class="function"><span class="keyword">func</span> <span class="title">main</span><span class="params">()</span></span> &#123;</span><br><span class="line">	source := <span class="built_in">make</span>(<span class="keyword">chan</span> <span class="keyword">int</span>)</span><br><span class="line">	collector := <span class="built_in">make</span>(<span class="keyword">chan</span> <span class="keyword">int</span>)</span><br><span class="line">	<span class="keyword">var</span> res []<span class="keyword">int</span></span><br><span class="line">	<span class="comment">// generate</span></span><br><span class="line">	<span class="keyword">go</span> <span class="function"><span class="keyword">func</span><span class="params">()</span></span> &#123;</span><br><span class="line">		<span class="keyword">defer</span> fmt.Println(<span class="string">&quot;generate end&quot;</span>)</span><br><span class="line">		<span class="keyword">defer</span> <span class="built_in">close</span>(source)</span><br><span class="line">		arr := []<span class="keyword">int</span>&#123;<span class="number">1</span>, <span class="number">2</span>, <span class="number">3</span>, <span class="number">4</span>, <span class="number">5</span>&#125;</span><br><span class="line">		<span class="keyword">for</span> _, v := <span class="keyword">range</span> arr &#123;</span><br><span class="line">			source &lt;- v</span><br><span class="line">		&#125;</span><br><span class="line">	&#125;()</span><br><span class="line">	<span class="comment">// map</span></span><br><span class="line">	<span class="keyword">go</span> <span class="function"><span class="keyword">func</span><span class="params">()</span></span> &#123;</span><br><span class="line">		<span class="keyword">defer</span> fmt.Println(<span class="string">&quot;map end&quot;</span>)</span><br><span class="line">		<span class="keyword">var</span> wg sync.WaitGroup</span><br><span class="line">		<span class="keyword">defer</span> <span class="function"><span class="keyword">func</span><span class="params">()</span></span> &#123;</span><br><span class="line">			<span class="comment">// 将 source 消费殆尽</span></span><br><span class="line">			<span class="keyword">for</span> <span class="keyword">range</span> source &#123;</span><br><span class="line">			&#125;</span><br><span class="line">			wg.Wait()</span><br><span class="line">			<span class="built_in">close</span>(collector)</span><br><span class="line">		&#125;()</span><br><span class="line">		count := <span class="number">0</span></span><br><span class="line">		<span class="keyword">for</span> v := <span class="keyword">range</span> source &#123;</span><br><span class="line">			count++</span><br><span class="line">			<span class="comment">// 模拟出错</span></span><br><span class="line">			<span class="keyword">if</span> count == <span class="number">4</span> &#123;</span><br><span class="line">				<span class="keyword">return</span></span><br><span class="line">			&#125;</span><br><span class="line">			wg.Add(<span class="number">1</span>)</span><br><span class="line">			<span class="keyword">go</span> <span class="function"><span class="keyword">func</span><span class="params">(item <span class="keyword">int</span>)</span></span> &#123;</span><br><span class="line">				<span class="keyword">defer</span> wg.Done()</span><br><span class="line">				collector &lt;- item + <span class="number">100</span></span><br><span class="line">			&#125;(v)</span><br><span class="line">		&#125;</span><br><span class="line">	&#125;()</span><br><span class="line">	<span class="comment">// reduce</span></span><br><span class="line">	<span class="keyword">go</span> <span class="function"><span class="keyword">func</span><span class="params">()</span></span> &#123;</span><br><span class="line">		<span class="keyword">defer</span> fmt.Println(<span class="string">&quot;reduce end&quot;</span>)</span><br><span class="line">		<span class="keyword">for</span> v := <span class="keyword">range</span> collector &#123;</span><br><span class="line">			res = <span class="built_in">append</span>(res, v)</span><br><span class="line">		&#125;</span><br><span class="line">	&#125;()</span><br><span class="line">	<span class="comment">// 统计</span></span><br><span class="line">	<span class="keyword">for</span> &#123;</span><br><span class="line">		fmt.Println(<span class="string">&quot;result:&quot;</span>, res, <span class="string">&quot;, goroutine num:&quot;</span>, runtime.NumGoroutine())</span><br><span class="line">		time.Sleep(time.Second)</span><br><span class="line">	&#125;</span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure>
+
+<p>运行结果：</p>
+<figure class="highlight plaintext"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br></pre></td><td class="code"><pre><span class="line">result: [] , goroutine num: 4</span><br><span class="line">generate end</span><br><span class="line">reduce end</span><br><span class="line">map end</span><br><span class="line">result: [102 101 103] , goroutine num: 1</span><br><span class="line">result: [102 101 103] , goroutine num: 1</span><br><span class="line">result: [102 101 103] , goroutine num: 1</span><br><span class="line">result: [102 101 103] , goroutine num: 1</span><br><span class="line">.........</span><br><span class="line">.........</span><br><span class="line">.........</span><br></pre></td></tr></table></figure>
+
+<p>因此针对通道导致的协程泄漏，只要记住 <code>谁写入谁关闭，谁接收谁消费殆尽</code> 基本就不会出大问题。</p>
+<blockquote>
+<p>将通道数据消耗殆尽的操作字 go-zero 封装成了一个函数</p>
+</blockquote>
+<figure class="highlight go"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br></pre></td><td class="code"><pre><span class="line"><span class="function"><span class="keyword">func</span> <span class="title">drain</span><span class="params">(channel &lt;-<span class="keyword">chan</span> <span class="keyword">interface</span>&#123;&#125;)</span></span> &#123;</span><br><span class="line"><span class="comment">// drain the channel</span></span><br><span class="line">  <span class="keyword">for</span> <span class="keyword">range</span> channel &#123;</span><br><span class="line">  &#125;</span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure>
+
+<p>回归到 <code>cancel</code> 函数的设计，由于该函数的目的是接收一个错误，然后进行取消操作，我们可以定义函数为 <code>cancel(err error)</code> ，并且该函数只能被执行一次，因为涉及到 <code>close</code> 通道，多次 <code>close</code> 通道会导致 <code>panic</code> ，所以可以使用 <code>sync.Once</code> 解决这个问题。通过定义函数 <code>func once(fn func(error)) func(error)</code>   和使用闭包进行封装，代码如下:</p>
+<figure class="highlight go"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br></pre></td><td class="code"><pre><span class="line"><span class="function"><span class="keyword">func</span> <span class="title">once</span><span class="params">(fn <span class="keyword">func</span>(error)</span>) <span class="title">func</span><span class="params">(error)</span></span> &#123;</span><br><span class="line">	once := <span class="built_in">new</span>(sync.Once)</span><br><span class="line">	<span class="keyword">return</span> <span class="function"><span class="keyword">func</span><span class="params">(err error)</span></span> &#123;</span><br><span class="line">		once.Do(<span class="function"><span class="keyword">func</span><span class="params">()</span></span> &#123;</span><br><span class="line">			fn(err)</span><br><span class="line">		&#125;)</span><br><span class="line">	&#125;</span><br><span class="line">&#125;</span><br><span class="line"></span><br><span class="line">cancel := once(<span class="function"><span class="keyword">func</span><span class="params">(err error)</span></span> &#123;</span><br><span class="line">  <span class="comment">// 设置错误</span></span><br><span class="line">		<span class="keyword">if</span> err != <span class="literal">nil</span> &#123;</span><br><span class="line">			retErr.Set(err)</span><br><span class="line">		&#125; <span class="keyword">else</span> &#123;</span><br><span class="line">			retErr.Set(ErrCancelWithNil)</span><br><span class="line">		&#125;</span><br><span class="line">	<span class="comment">// 防止协程泄露，消耗source中的数据</span></span><br><span class="line">		drain(source)</span><br><span class="line">  <span class="comment">// 执行finish操作</span></span><br><span class="line">		finish()</span><br><span class="line">	&#125;)</span><br></pre></td></tr></table></figure>
+
+<p>在 <code>map</code> 和 <code>reduce</code> 代码设计部分提到一个为了广播结束事件的通道 <code>done</code>，这个通道也不能被 <code>close</code> 多次，go-zero 针对这种广播结束事件的通道也进行了一次封装，同样使用的是 <code>sync.Once</code> ，代码如下：</p>
+<figure class="highlight go"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br></pre></td><td class="code"><pre><span class="line"><span class="keyword">type</span> DoneChan <span class="keyword">struct</span> &#123;</span><br><span class="line">    done <span class="keyword">chan</span> <span class="keyword">struct</span>&#123;&#125;</span><br><span class="line">	once sync.Once</span><br><span class="line">&#125;</span><br><span class="line"></span><br><span class="line"><span class="function"><span class="keyword">func</span> <span class="title">NewDoneChan</span><span class="params">()</span> *<span class="title">DoneChan</span></span> &#123;</span><br><span class="line">	<span class="keyword">return</span> &amp;DoneChan&#123;</span><br><span class="line">		done: <span class="built_in">make</span>(<span class="keyword">chan</span> <span class="keyword">struct</span>&#123;&#125;),</span><br><span class="line">	&#125;</span><br><span class="line">&#125;</span><br><span class="line"></span><br><span class="line"><span class="function"><span class="keyword">func</span> <span class="params">(dc *DoneChan)</span> <span class="title">Close</span><span class="params">()</span></span> &#123;</span><br><span class="line">	dc.once.Do(<span class="function"><span class="keyword">func</span><span class="params">()</span></span> &#123;</span><br><span class="line">		<span class="built_in">close</span>(dc.done)</span><br><span class="line">	&#125;)</span><br><span class="line">&#125;</span><br><span class="line"></span><br><span class="line"><span class="function"><span class="keyword">func</span> <span class="params">(dc *DoneChan)</span> <span class="title">Done</span><span class="params">()</span> <span class="title">chan</span> <span class="title">struct</span></span>&#123;&#125; &#123;</span><br><span class="line">	<span class="keyword">return</span> dc.done</span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure>
+
+<p>在 <code>finish</code> 函数中主要就是关闭通道 <code>done</code>，因此代码为：</p>
+<figure class="highlight go"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br></pre></td><td class="code"><pre><span class="line">finish := <span class="function"><span class="keyword">func</span><span class="params">()</span></span> &#123;</span><br><span class="line">	done.Close()</span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure>
+
+<h3 id="代码块组合"><a href="#代码块组合" class="headerlink" title="代码块组合"></a>代码块组合</h3><p>至此，我们可以将上面讲的各个部分的代码块进行组合，获得我们最终的 <code>MapReduce</code> 函数，代码如下：</p>
+<figure class="highlight go"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br></pre></td><td class="code"><pre><span class="line"><span class="function"><span class="keyword">func</span> <span class="title">MapReduce</span><span class="params">(generate GenerateFunc, mapper MapperFunc, reducer ReducerFunc, workers <span class="keyword">int</span>)</span> <span class="params">(<span class="keyword">interface</span>&#123;&#125;, error)</span></span> &#123;</span><br><span class="line">	source := buildSource(generate)</span><br><span class="line">	<span class="keyword">return</span> MapReduceWithSource(source, mapper, reducer, workers)</span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure>
+
+<p>其中，<code>generate GenerateFunc</code> ，<code>mapper MapperFunc</code>，<code>reducer ReducerFunc</code> 三部分都交给使用者去实现，<code>workers</code> 是控制的协程数量（此处源码是用 <code>FUNCTIONAL OPTIONS</code> 函数式编程方式，由于不是本文重点，因此直接用整型）。核心代码就是 <code>MapReduceWithSource(source, mapper, reducer, workers)</code> ，实现方式如下：</p>
+<figure class="highlight go"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br><span class="line">24</span><br><span class="line">25</span><br><span class="line">26</span><br><span class="line">27</span><br><span class="line">28</span><br><span class="line">29</span><br><span class="line">30</span><br><span class="line">31</span><br><span class="line">32</span><br><span class="line">33</span><br><span class="line">34</span><br><span class="line">35</span><br><span class="line">36</span><br><span class="line">37</span><br><span class="line">38</span><br><span class="line">39</span><br><span class="line">40</span><br><span class="line">41</span><br><span class="line">42</span><br><span class="line">43</span><br><span class="line">44</span><br><span class="line">45</span><br><span class="line">46</span><br><span class="line">47</span><br><span class="line">48</span><br><span class="line">49</span><br><span class="line">50</span><br><span class="line">51</span><br></pre></td><td class="code"><pre><span class="line"><span class="function"><span class="keyword">func</span> <span class="title">MapReduceWithSource</span><span class="params">(source &lt;-<span class="keyword">chan</span> <span class="keyword">interface</span>&#123;&#125;, mapper MapperFunc, reducer ReducerFunc, workers <span class="keyword">int</span>)</span> <span class="params">(<span class="keyword">interface</span>&#123;&#125;, error)</span></span> &#123;</span><br><span class="line">	output := <span class="built_in">make</span>(<span class="keyword">chan</span> <span class="keyword">interface</span>&#123;&#125;) <span class="comment">// 使用者最终输出的管道</span></span><br><span class="line">	collector := <span class="built_in">make</span>(<span class="keyword">chan</span> <span class="keyword">interface</span>&#123;&#125;, workers)</span><br><span class="line">	done := syncx.NewDoneChan() <span class="comment">// 广播通知结束事件的管道 done</span></span><br><span class="line">	writer := newGuardedWriter(output, done.Done()) <span class="comment">// 构建 reduce 中使用的 writer</span></span><br><span class="line">	<span class="keyword">var</span> closeOnce sync.Once <span class="comment">// 用于控制代码执行一次</span></span><br><span class="line">	<span class="keyword">var</span> retErr errorx.AtomicError <span class="comment">// 保证原子性设置错误，由于多个协程并发设置 error 会导致 data race</span></span><br><span class="line">	finish := <span class="function"><span class="keyword">func</span><span class="params">()</span></span> &#123; <span class="comment">// 对比上面的示例代码，多了对 ouput 的关闭，因此为保证只 close 一次，也使用了sync.Once</span></span><br><span class="line">		closeOnce.Do(<span class="function"><span class="keyword">func</span><span class="params">()</span></span> &#123;</span><br><span class="line">			done.Close()</span><br><span class="line">			<span class="built_in">close</span>(output)</span><br><span class="line">		&#125;)</span><br><span class="line">	&#125;</span><br><span class="line">	cancel := once(<span class="function"><span class="keyword">func</span><span class="params">(err error)</span></span> &#123;</span><br><span class="line">		<span class="keyword">if</span> err != <span class="literal">nil</span> &#123;</span><br><span class="line">			retErr.Set(err)</span><br><span class="line">		&#125; <span class="keyword">else</span> &#123;</span><br><span class="line">			retErr.Set(ErrCancelWithNil)</span><br><span class="line">		&#125;</span><br><span class="line"></span><br><span class="line">		drain(source) <span class="comment">// 由于 generate 部分没有使用 done 结束，因此调用 cancel 的地方需要负责将 source 消耗殆尽</span></span><br><span class="line">		finish()</span><br><span class="line">	&#125;)</span><br><span class="line">  <span class="comment">// 执行 reduce 部分逻辑</span></span><br><span class="line">	<span class="keyword">go</span> <span class="function"><span class="keyword">func</span><span class="params">()</span></span> &#123;</span><br><span class="line">		<span class="keyword">defer</span> <span class="function"><span class="keyword">func</span><span class="params">()</span></span> &#123; <span class="comment">// 对比上面的示例代码，新增了这部分结束处理代码，出现异常则调用 cancel，否则直接调用 finish 即可</span></span><br><span class="line">			drain(collector)</span><br><span class="line"></span><br><span class="line">			<span class="keyword">if</span> r := <span class="built_in">recover</span>(); r != <span class="literal">nil</span> &#123;</span><br><span class="line">				cancel(fmt.Errorf(<span class="string">&quot;%v&quot;</span>, r))</span><br><span class="line">			&#125; <span class="keyword">else</span> &#123;</span><br><span class="line">				finish()</span><br><span class="line">			&#125;</span><br><span class="line">		&#125;()</span><br><span class="line"></span><br><span class="line">		reducer(collector, writer, cancel)</span><br><span class="line">	&#125;()</span><br><span class="line">	<span class="comment">// 执行 map 部分逻辑</span></span><br><span class="line">	<span class="keyword">go</span> executeMappers(<span class="function"><span class="keyword">func</span><span class="params">(item <span class="keyword">interface</span>&#123;&#125;, w Writer)</span></span> &#123;</span><br><span class="line">		mapper(item, w, cancel)</span><br><span class="line">	&#125;, source, collector, done.Done(), options.workers)</span><br><span class="line">	<span class="comment">// 获取最终输出，没有结果返回的时候会先阻塞在此处</span></span><br><span class="line">	value, ok := &lt;-output</span><br><span class="line">	<span class="keyword">if</span> err := retErr.Load(); err != <span class="literal">nil</span> &#123;</span><br><span class="line">		<span class="keyword">return</span> <span class="literal">nil</span>, err</span><br><span class="line">	&#125; <span class="keyword">else</span> <span class="keyword">if</span> ok &#123;</span><br><span class="line">		<span class="keyword">return</span> value, <span class="literal">nil</span></span><br><span class="line">	&#125; <span class="keyword">else</span> &#123;</span><br><span class="line">		<span class="keyword">return</span> <span class="literal">nil</span>, ErrReduceNoOutput</span><br><span class="line">	&#125;</span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure>
+
+<h3 id="总结"><a href="#总结" class="headerlink" title="总结"></a>总结</h3><p>本文对 <code>go-zero</code> 中的 <code>MapReduce</code> 代码进行了拆解分析，代码还是比较简练易懂，对通道的使用也是值得学习的，简要概括如下：</p>
+<ul>
+<li>通道的使用遵循”谁写入谁关闭，谁接收谁消费殆尽“，要小心协程泄漏</li>
+<li>利用 <code>close</code> 通道达到广播通知的效果</li>
+<li>使用 <code>sync.Once</code> 保护部分只能执行一次的代码</li>
+<li>注意对 <code>panic</code> 进行 <code>recover</code> ，为使用者兜底</li>
+</ul>
+
+    </div>
+
+    
+    
+    
+
+      <footer class="post-footer">
+          <div class="post-tags">
+              <a href="/tags/Go/" rel="tag"># Go</a>
+              <a href="/tags/go-zero/" rel="tag"># go-zero</a>
+          </div>
+
+        
+
+
+        
+    <div class="post-nav">
+      <div class="post-nav-item">
+    <a href="/2022/01/08/yuque/go-zero%20%E6%BA%90%E7%A0%81%E9%98%85%E8%AF%BB%E4%B9%8B%20SharedCalls/" rel="prev" title="go-zero 源码阅读之 SharedCalls">
+      <i class="fa fa-chevron-left"></i> go-zero 源码阅读之 SharedCalls
+    </a></div>
+      <div class="post-nav-item">
+    <a href="/2022/03/25/yuque/%E3%80%8AUltimate%20Go%E3%80%8B%E5%AD%A6%E4%B9%A0%E7%AC%94%E8%AE%B0/" rel="next" title="《Ultimate Go》学习笔记">
+      《Ultimate Go》学习笔记 <i class="fa fa-chevron-right"></i>
+    </a></div>
+    </div>
+      </footer>
+    
+  </article>
+  
+  
+  
+
+
+
+          </div>
+          
+
+<script>
+  window.addEventListener('tabs:register', () => {
+    let { activeClass } = CONFIG.comments;
+    if (CONFIG.comments.storage) {
+      activeClass = localStorage.getItem('comments_active') || activeClass;
+    }
+    if (activeClass) {
+      let activeTab = document.querySelector(`a[href="#comment-${activeClass}"]`);
+      if (activeTab) {
+        activeTab.click();
+      }
+    }
+  });
+  if (CONFIG.comments.storage) {
+    window.addEventListener('tabs:click', event => {
+      if (!event.target.matches('.tabs-comment .tab-content .tab-pane')) return;
+      let commentClass = event.target.classList[1];
+      localStorage.setItem('comments_active', commentClass);
+    });
+  }
+</script>
+
+        </div>
+          
+  
+  <div class="toggle sidebar-toggle">
+    <span class="toggle-line toggle-line-first"></span>
+    <span class="toggle-line toggle-line-middle"></span>
+    <span class="toggle-line toggle-line-last"></span>
+  </div>
+
+  <aside class="sidebar">
+    <div class="sidebar-inner">
+
+      <ul class="sidebar-nav motion-element">
+        <li class="sidebar-nav-toc">
+          文章目录
+        </li>
+        <li class="sidebar-nav-overview">
+          站点概览
+        </li>
+      </ul>
+
+      <!--noindex-->
+      <div class="post-toc-wrap sidebar-panel">
+          <div class="post-toc motion-element"><ol class="nav"><li class="nav-item nav-level-2"><a class="nav-link" href="#%E5%89%8D%E8%A8%80"><span class="nav-number">1.</span> <span class="nav-text">前言</span></a></li><li class="nav-item nav-level-2"><a class="nav-link" href="#%E5%BA%94%E7%94%A8%E5%9C%BA%E6%99%AF"><span class="nav-number">2.</span> <span class="nav-text">应用场景</span></a></li><li class="nav-item nav-level-2"><a class="nav-link" href="#%E6%BA%90%E7%A0%81%E8%AE%BE%E8%AE%A1"><span class="nav-number">3.</span> <span class="nav-text">源码设计</span></a><ol class="nav-child"><li class="nav-item nav-level-3"><a class="nav-link" href="#MapReduce-%E4%BB%A3%E7%A0%81%E7%BB%93%E6%9E%84"><span class="nav-number">3.1.</span> <span class="nav-text">MapReduce 代码结构</span></a></li><li class="nav-item nav-level-3"><a class="nav-link" href="#Generate-%E4%BB%A3%E7%A0%81%E8%AE%BE%E8%AE%A1"><span class="nav-number">3.2.</span> <span class="nav-text">Generate 代码设计</span></a></li><li class="nav-item nav-level-3"><a class="nav-link" href="#Map-%E4%BB%A3%E7%A0%81%E8%AE%BE%E8%AE%A1"><span class="nav-number">3.3.</span> <span class="nav-text">Map 代码设计</span></a></li><li class="nav-item nav-level-3"><a class="nav-link" href="#Reduce-%E4%BB%A3%E7%A0%81%E8%AE%BE%E8%AE%A1"><span class="nav-number">3.4.</span> <span class="nav-text">Reduce 代码设计</span></a></li><li class="nav-item nav-level-3"><a class="nav-link" href="#cancel-%E5%87%BD%E6%95%B0%E8%AE%BE%E8%AE%A1"><span class="nav-number">3.5.</span> <span class="nav-text">cancel 函数设计</span></a></li><li class="nav-item nav-level-3"><a class="nav-link" href="#%E4%BB%A3%E7%A0%81%E5%9D%97%E7%BB%84%E5%90%88"><span class="nav-number">3.6.</span> <span class="nav-text">代码块组合</span></a></li><li class="nav-item nav-level-3"><a class="nav-link" href="#%E6%80%BB%E7%BB%93"><span class="nav-number">3.7.</span> <span class="nav-text">总结</span></a></li></ol></li></ol></div>
+      </div>
+      <!--/noindex-->
+
+      <div class="site-overview-wrap sidebar-panel">
+        <div class="site-author motion-element" itemprop="author" itemscope itemtype="http://schema.org/Person">
+  <p class="site-author-name" itemprop="name">betNevS</p>
+  <div class="site-description" itemprop="description">做自己喜欢做的事情</div>
+</div>
+<div class="site-state-wrap motion-element">
+  <nav class="site-state">
+      <div class="site-state-item site-state-posts">
+          <a href="/archives/">
+        
+          <span class="site-state-item-count">4</span>
+          <span class="site-state-item-name">日志</span>
+        </a>
+      </div>
+      <div class="site-state-item site-state-tags">
+            <a href="/tags/">
+          
+        <span class="site-state-item-count">4</span>
+        <span class="site-state-item-name">标签</span></a>
+      </div>
+  </nav>
+</div>
+
+
+
+      </div>
+
+    </div>
+  </aside>
+  <div id="sidebar-dimmer"></div>
+
+
+      </div>
+    </main>
+
+    <footer class="footer">
+      <div class="footer-inner">
+        
+
+        
+
+<div class="copyright">
+  
+  &copy; 
+  <span itemprop="copyrightYear">2022</span>
+  <span class="with-love">
+    <i class="fa fa-heart"></i>
+  </span>
+  <span class="author" itemprop="copyrightHolder">betNevS</span>
+</div>
+  <div class="powered-by">由 <a href="https://hexo.io/" class="theme-link" rel="noopener" target="_blank">Hexo</a> & <a href="https://theme-next.org/" class="theme-link" rel="noopener" target="_blank">NexT.Gemini</a> 强力驱动
+  </div>
+
+        
+
+
+
+
+
+
+
+
+      </div>
+    </footer>
+  </div>
+
+  
+  <script src="/lib/anime.min.js"></script>
+  <script src="/lib/velocity/velocity.min.js"></script>
+  <script src="/lib/velocity/velocity.ui.min.js"></script>
+
+<script src="/js/utils.js"></script>
+
+<script src="/js/motion.js"></script>
+
+
+<script src="/js/schemes/pisces.js"></script>
+
+
+<script src="/js/next-boot.js"></script>
+
+
+
+
+  
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+  
+
+  
+
+</body>
+</html>
